@@ -19,6 +19,9 @@ export default defineConfig({
       },
     },
   },
+  paths: {
+    tests: "test/hardhat",
+  },
   networks: {
     hardhatMainnet: {
       type: "edr-simulated",
