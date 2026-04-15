@@ -2,18 +2,20 @@
 pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "./MerkleRoot.sol";
 
-contract Vesting {
+contract Vesting is Ownable {
     IERC20 public immutable token;
     MerkleRoot public immutable merkleRoot;
 
     error ScheduleExists();
-    error TransferFailed();
     error NoSchedule();
     error NothingToRelease();
-    error NotAllowed();
     error InvalidProof();
+    error InsufficientContractBalance();
+    error InvalidBeneficiary();
+    error InvalidAmount();
 
     struct Schedule {
         uint256 totalAmount;
@@ -22,31 +24,39 @@ contract Vesting {
         uint256 duration;
     }
 
+    mapping(address => uint256) public adminAllocations;
     mapping(address => Schedule) public vestingSchedules;
 
-    constructor(address _token, address _root) {
+    constructor(address _token, address _root) Ownable(msg.sender) {
         token = IERC20(_token);
         merkleRoot = MerkleRoot(_root);
     }
 
-    function createSchedule(
+    function setAllocation(
+        address beneficiary,
+        uint256 amount
+    ) external onlyOwner {
+        if (beneficiary == address(0)) revert InvalidBeneficiary();
+        if (amount == 0) revert InvalidAmount();
+        adminAllocations[beneficiary] = amount;
+    }
+
+    function claimAirdrop(
         uint256 amount,
         uint256 start,
         uint256 duration,
         bytes32[] calldata proof
     ) external {
+        if (adminAllocations[msg.sender] != amount) {
+            revert InvalidAmount();
+        }
+
         if (!merkleRoot.Verify(amount, proof, start, duration, msg.sender)) {
             revert InvalidProof();
         }
 
         if (vestingSchedules[msg.sender].totalAmount > 0) {
             revert ScheduleExists();
-        }
-
-        bool success = token.transferFrom(msg.sender, address(this), amount);
-
-        if (!success) {
-            revert TransferFailed();
         }
 
         vestingSchedules[msg.sender] = Schedule({
@@ -71,6 +81,10 @@ contract Vesting {
             revert NothingToRelease();
         }
 
+        if (token.balanceOf(address(this)) < releasable) {
+            revert InsufficientContractBalance();
+        }
+
         schedule.released += releasable;
         token.transfer(msg.sender, releasable);
     }
@@ -81,6 +95,7 @@ contract Vesting {
         if (block.timestamp < schedule.start) return 0;
         if (block.timestamp >= schedule.start + schedule.duration)
             return schedule.totalAmount;
+
         return
             (schedule.totalAmount * (block.timestamp - schedule.start)) /
             schedule.duration;
